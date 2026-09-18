@@ -191,6 +191,7 @@ class AppDelegate: NSObject,
     private let appIconUpdater = AppIconUpdater()
 
     @MainActor private lazy var menuShortcutManager = Ghostty.MenuShortcutManager()
+    private let quickTerminalHotKey = QuickTerminalGlobalHotKey()
 
     override init() {
 #if DEBUG
@@ -248,6 +249,13 @@ class AppDelegate: NSObject,
 
         // Initial config loading
         ghosttyConfigDidChange(config: ghostty.config)
+
+        // Keep Momok's floating terminal available globally without requiring
+        // Accessibility permission. Carbon hotkeys survive app focus changes and
+        // do not depend on the CGEvent tap used by custom global keybindings.
+        quickTerminalHotKey.register { [weak self] in
+            self?.toggleQuickTerminal(NSApp)
+        }
 
         // Start our update checker.
         updateController.startUpdater()
@@ -319,6 +327,15 @@ class AppDelegate: NSObject,
                 actions: actions,
                 intentIdentifiers: [],
                 options: [.customDismissAction]
+            ),
+            UNNotificationCategory(
+                identifier: PullRequestNotification.categoryIdentifier,
+                actions: [
+                    UNNotificationAction(
+                        identifier: PullRequestNotification.openActionIdentifier,
+                        title: "Open Pull Request")
+                ],
+                intentIdentifiers: []
             )
         ])
         center.delegate = self
@@ -446,6 +463,20 @@ class AppDelegate: NSObject,
         // If we have visible windows then we allow macOS to do its default behavior
         // of focusing one of them.
         guard !flag else { return true }
+
+        let windowsHiddenInApplicationIcon: [TerminalWindow] = NSApp.windows.compactMap { window in
+            guard let window = window as? TerminalWindow, window.isHiddenInApplicationIcon else {
+                return nil
+            }
+            return window
+        }
+        if let keyWindow = windowsHiddenInApplicationIcon.last {
+            windowsHiddenInApplicationIcon.dropLast().forEach {
+                $0.restoreFromApplicationIcon(makeKey: false)
+            }
+            keyWindow.restoreFromApplicationIcon(makeKey: true)
+            return false
+        }
 
         // If we have any windows in our terminal manager we don't do anything.
         // This is possible with flag set to false if there a race where the
@@ -913,6 +944,16 @@ class AppDelegate: NSObject,
         didReceive: UNNotificationResponse,
         withCompletionHandler: () -> Void
     ) {
+        let notification = didReceive.notification
+        if notification.request.content.categoryIdentifier == PullRequestNotification.categoryIdentifier {
+            if let value = notification.request.content.userInfo[PullRequestNotification.urlKey] as? String,
+               let url = URL(string: value) {
+                NSWorkspace.shared.open(url)
+            }
+            withCompletionHandler()
+            return
+        }
+
         ghostty.handleUserNotification(response: didReceive)
         withCompletionHandler()
     }
@@ -922,6 +963,11 @@ class AppDelegate: NSObject,
         willPresent: UNNotification,
         withCompletionHandler: (UNNotificationPresentationOptions) -> Void
     ) {
+        if willPresent.request.content.categoryIdentifier == PullRequestNotification.categoryIdentifier {
+            withCompletionHandler([.banner, .sound])
+            return
+        }
+
         let shouldPresent = ghostty.shouldPresentNotification(notification: willPresent)
         let options: UNNotificationPresentationOptions = shouldPresent ? [.banner, .sound] : []
         withCompletionHandler(options)

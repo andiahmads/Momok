@@ -105,20 +105,11 @@ cd Momok
 zig build -Doptimize=ReleaseFast
 ```
 
-Bundle aplikasi akan dibuat di `macos/build/ReleaseLocal/Momok.app`. Tutup
-Momok versi lama, lalu install ke folder Applications:
+Hasil build otomatis mengganti satu aplikasi kanonis di
+`/Applications/Momok.app`, memperbarui ikon Dock, lalu membuka Momok:
 
 ```shell
-pkill -f '/Applications/Momok.app/Contents/MacOS/ghostty' 2>/dev/null || true
-ditto macos/build/ReleaseLocal/Momok.app /Applications/Momok.app
-open /Applications/Momok.app
-```
-
-Jika ikon Dock belum berubah setelah update, jalankan:
-
-```shell
-killall Dock
-open /Applications/Momok.app
+zig build -Doptimize=ReleaseFast
 ```
 
 ### Update manual
@@ -127,9 +118,6 @@ open /Applications/Momok.app
 cd Momok
 git pull
 zig build -Doptimize=ReleaseFast
-pkill -f '/Applications/Momok.app/Contents/MacOS/ghostty' 2>/dev/null || true
-ditto macos/build/ReleaseLocal/Momok.app /Applications/Momok.app
-open /Applications/Momok.app
 ```
 
 ## Konfigurasi
@@ -162,11 +150,11 @@ variable `NO_COLOR=1`. Momok menyediakan `TERM=xterm-256color` dan
 
 ## Pengembangan
 
-Build aplikasi untuk pengembangan:
+Build aplikasi untuk pengembangan. Hasil Debug juga mengganti aplikasi Momok
+yang sama di Applications sehingga tidak membuat ikon Dock kedua:
 
 ```shell
-zig build
-open macos/build/Debug/Momok.app
+macos/build.nu
 ```
 
 Build Debug menampilkan peringatan performa dan hanya ditujukan untuk proses

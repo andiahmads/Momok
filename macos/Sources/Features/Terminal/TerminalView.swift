@@ -57,7 +57,10 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
 
     // File browser visibility is shared across windows and restored between launches.
     @AppStorage("ghostty.fileBrowserVisible") private var fileBrowserVisible = true
+    @StateObject private var codeEditor = TerminalCodeEditorModel()
     @State private var previewURL: URL?
+    @State private var pullRequestsVisible = false
+    @State private var issuesVisible = false
 
     // This seems like a crutch after switching from SwiftUI to AppKit lifecycle.
     @FocusState private var focused: Bool
@@ -91,25 +94,59 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
                     if fileBrowserVisible {
                         TerminalFileBrowser(
                             rootURL: pwdURL,
+                            pullRequestsVisible: pullRequestsVisible,
+                            issuesVisible: issuesVisible,
+                            showFiles: {
+                                pullRequestsVisible = false
+                                issuesVisible = false
+                            },
+                            showPullRequests: {
+                                guard codeEditor.requestClose() else { return }
+                                previewURL = nil
+                                issuesVisible = false
+                                pullRequestsVisible = true
+                            },
+                            showIssues: {
+                                guard codeEditor.requestClose() else { return }
+                                previewURL = nil
+                                pullRequestsVisible = false
+                                issuesVisible = true
+                            },
                             openFile: { url in
+                                pullRequestsVisible = false
+                                issuesVisible = false
                                 if url.pathExtension.lowercased() == "md"
-                                    || UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true
-                                {
+                                    || UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true {
+                                    guard codeEditor.requestClose() else { return }
                                     previewURL = url
+                                } else if TerminalCodeLanguage.supports(url) {
+                                    if codeEditor.open(url) {
+                                        windowController.closeFileBrowserEditorSplit()
+                                        previewURL = nil
+                                    }
                                 } else {
+                                    guard codeEditor.requestClose() else { return }
                                     previewURL = nil
                                     windowController.openFileInVimSplit(url)
                                 }
                             })
                     }
 
-                    if let previewURL {
+                    if let previewURL, !pullRequestsVisible, !issuesVisible {
                         TerminalFilePreview(
                             url: previewURL,
                             onClose: { self.previewURL = nil })
                     }
+
+                    if codeEditor.isOpen, !pullRequestsVisible, !issuesVisible {
+                        TerminalCodeEditor(model: codeEditor) {
+                            codeEditor.closeWithoutSaving()
+                        }
+                    }
                 }
 
+                // Every window needs its terminal content, including Quick Terminal,
+                // which deliberately has no normal window controller or sidebar.
                 ZStack {
                     VStack(spacing: 0) {
                         // If we're running in debug mode we show a warning so that users
@@ -156,6 +193,19 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
                         }
                     }
 
+                    if pullRequestsVisible {
+                        TerminalPullRequestsView(
+                            rootURL: pwdURL,
+                            onClose: { pullRequestsVisible = false },
+                            onOpenThread: openPullRequestThread)
+                    }
+
+                    if issuesVisible {
+                        TerminalIssuesView(
+                            rootURL: pwdURL,
+                            onClose: { issuesVisible = false })
+                    }
+
                     // Show update information above all else.
                     if viewModel.updateOverlayIsVisible {
                         UpdateOverlay()
@@ -164,6 +214,20 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
             }
             .frame(maxWidth: .greatestFiniteMagnitude, maxHeight: .greatestFiniteMagnitude)
         }
+    }
+
+    private func openPullRequestThread(_ prompt: String) {
+        var config = Ghostty.SurfaceConfiguration()
+        config.workingDirectory = pwdURL?.path(percentEncoded: false)
+        config.initialInput = "codex \(Self.shellQuote(prompt))\n"
+        _ = TerminalController.newTab(
+            ghostty,
+            from: windowController?.window,
+            withBaseConfig: config)
+    }
+
+    private static func shellQuote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 }
 

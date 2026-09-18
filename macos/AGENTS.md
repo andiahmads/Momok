@@ -7,7 +7,11 @@
 - Use `macos/build.nu` to build the macOS app, do not use `zig build`
   (except to build the underlying library as mentioned above).
   - Build: `macos/build.nu [--scheme Ghostty] [--configuration Debug] [--action build]`
-  - Output: `macos/build/<configuration>/Ghostty.app` (e.g. `macos/build/Debug/Ghostty.app`)
+  - A successful local build replaces and opens `/Applications/Momok.app`, then
+    removes the temporary app bundle from `macos/build/<configuration>` so
+    Spotlight and the Dock only see one Momok.
+  - Pass `--skip-install` to preserve the build product at
+    `macos/build/<configuration>/Momok.app`.
 - Run unit tests directly with `macos/build.nu --action test`
 
 ## AppleScript
@@ -22,13 +26,14 @@
   3. Enums
   4. Commands
 - Test AppleScript support:
-  (1) Build with `macos/build.nu`
+  (1) Build with `macos/build.nu --skip-install` so the bundle remains in the
+      build directory for path-targeted AppleScript checks.
   (2) Launch and activate the app via osascript using the absolute path
       to the built app bundle:
-      `osascript -e 'tell application "<absolute path to build/Debug/Ghostty.app>" to activate'`
+      `osascript -e 'tell application "<absolute path to build/Debug/Momok.app>" to activate'`
   (3) Wait a few seconds for the app to fully launch and open a terminal.
   (4) Run test scripts with `osascript`, always targeting the app by
       its absolute path (not by name) to avoid calling the wrong
       application.
   (5) When done, quit via:
-      `osascript -e 'tell application "<absolute path to build/Debug/Ghostty.app>" to quit'`
+      `osascript -e 'tell application "<absolute path to build/Debug/Momok.app>" to quit'`

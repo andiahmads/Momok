@@ -4,14 +4,21 @@ import SwiftUI
 /// A file explorer rooted at the working directory of the focused terminal surface.
 struct TerminalFileBrowser: View {
     let rootURL: URL?
+    let pullRequestsVisible: Bool
+    let issuesVisible: Bool
+    let showFiles: () -> Void
+    let showPullRequests: () -> Void
+    let showIssues: () -> Void
     let openFile: (URL) -> Void
 
     @StateObject private var model = TerminalFileBrowserModel()
+    @StateObject private var branchModel = TerminalGitBranchModel()
     @AppStorage("ghostty.fileBrowserWidth") private var browserWidth = 280.0
     @AppStorage("ghostty.fileBrowserVisible") private var isVisible = true
     @State private var resizeStartWidth: Double?
     @State private var searchText = ""
     @State private var searchVisible = false
+    @State private var branchPickerVisible = false
 
     private let minimumWidth = 200.0
     private let maximumWidth = 520.0
@@ -34,17 +41,80 @@ struct TerminalFileBrowser: View {
 
             resizeHandle
         }
-        .onAppear { model.setRoot(rootURL) }
-        .onChange(of: rootURL) { model.setRoot($0) }
+        .onAppear {
+            model.setRoot(rootURL)
+            branchModel.setRoot(rootURL)
+        }
+        .onChange(of: rootURL) {
+            model.setRoot($0)
+            branchModel.setRoot($0)
+        }
     }
 
     private var header: some View {
         HStack(spacing: 10) {
-            Image(systemName: "doc.on.doc")
-                .foregroundStyle(.primary)
+            Button(action: showFiles) {
+                Image(systemName: "doc.on.doc")
+                    .foregroundStyle(
+                        pullRequestsVisible || issuesVisible ? Color.secondary : Color.primary)
+                    .padding(5)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5)
+                            .fill(
+                                pullRequestsVisible || issuesVisible
+                                    ? Color.clear
+                                    : Color.primary.opacity(0.08))
+                    )
+            }
+            .buttonStyle(.plain)
+            .help("Files")
 
-            Image(systemName: "bubble.left")
-                .foregroundStyle(.secondary)
+            Button(action: showPullRequests) {
+                PullRequestSidebarIcon()
+                    .foregroundStyle(pullRequestsVisible ? Color.primary : Color.secondary)
+                    .padding(5)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5)
+                            .fill(pullRequestsVisible ? Color.primary.opacity(0.08) : Color.clear)
+                    )
+            }
+            .buttonStyle(.plain)
+            .help("Pull Requests")
+
+            Button(action: showIssues) {
+                Image(systemName: "exclamationmark.circle")
+                    .foregroundStyle(issuesVisible ? Color.primary : Color.secondary)
+                    .padding(5)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5)
+                            .fill(issuesVisible ? Color.primary.opacity(0.08) : Color.clear)
+                    )
+            }
+            .buttonStyle(.plain)
+            .help("Issues")
+
+            Button {
+                branchPickerVisible.toggle()
+            } label: {
+                Image(systemName: "arrow.triangle.branch")
+                    .foregroundStyle(branchPickerVisible ? Color.primary : Color.secondary)
+                    .padding(5)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5)
+                            .fill(branchPickerVisible ? Color.primary.opacity(0.08) : Color.clear)
+                    )
+            }
+            .buttonStyle(.plain)
+            .help(
+                branchModel.currentBranch.isEmpty
+                    ? "Branches"
+                    : "Branches — \(branchModel.currentBranch)"
+            )
+            .popover(isPresented: $branchPickerVisible, arrowEdge: .bottom) {
+                TerminalGitBranchPicker(model: branchModel) {
+                    model.reload()
+                }
+            }
 
             Spacer(minLength: 8)
 
@@ -158,6 +228,43 @@ struct TerminalFileBrowser: View {
                 }
                 .onEnded { _ in resizeStartWidth = nil }
         )
+    }
+}
+
+private struct PullRequestSidebarIcon: View {
+    var body: some View {
+        Canvas { context, size in
+            let scale = min(size.width, size.height) / 16
+            let lineWidth = max(1, 1.35 * scale)
+
+            var path = Path()
+            path.move(to: CGPoint(x: 4 * scale, y: 5.5 * scale))
+            path.addLine(to: CGPoint(x: 4 * scale, y: 12.5 * scale))
+            path.move(to: CGPoint(x: 5.5 * scale, y: 3.5 * scale))
+            path.addLine(to: CGPoint(x: 9 * scale, y: 3.5 * scale))
+            path.addCurve(
+                to: CGPoint(x: 12 * scale, y: 6.5 * scale),
+                control1: CGPoint(x: 11 * scale, y: 3.5 * scale),
+                control2: CGPoint(x: 12 * scale, y: 4.5 * scale))
+            path.addLine(to: CGPoint(x: 12 * scale, y: 10.5 * scale))
+            context.stroke(
+                path,
+                with: .foreground,
+                style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round))
+
+            for point in [CGPoint(x: 4, y: 3.5), CGPoint(x: 4, y: 13.5), CGPoint(x: 12, y: 12.5)] {
+                let center = CGPoint(x: point.x * scale, y: point.y * scale)
+                let radius = 1.55 * scale
+                let circle = Path(ellipseIn: CGRect(
+                    x: center.x - radius,
+                    y: center.y - radius,
+                    width: radius * 2,
+                    height: radius * 2))
+                context.stroke(circle, with: .foreground, lineWidth: lineWidth)
+            }
+        }
+        .frame(width: 16, height: 16)
+        .accessibilityHidden(true)
     }
 }
 
@@ -325,6 +432,7 @@ private final class TerminalFileBrowserModel: ObservableObject {
             switch url.pathExtension.lowercased() {
             case "swift": return "swift"
             case "zig", "json", "yaml", "yml", "toml": return "curlybraces"
+            case "sql": return "tablecells"
             case "md", "txt": return "doc.text"
             case "png", "jpg", "jpeg", "gif", "webp", "svg": return "photo"
             case "js", "ts", "tsx", "jsx": return "j.square"
@@ -338,6 +446,7 @@ private final class TerminalFileBrowserModel: ObservableObject {
             case "js", "jsx": return .yellow
             case "ts", "tsx": return .blue
             case "json", "yaml", "yml", "toml": return .yellow
+            case "sql": return .cyan
             default: return .secondary
             }
         }
@@ -578,8 +687,26 @@ extension TerminalController {
 
         case let .vim(vimURL):
             config.command = "\(vimURL.path.shellQuoted) -- \(url.lastPathComponent.shellQuoted)"
-            _ = newSplit(at: anchor, direction: .right, baseConfig: config)
+            fileBrowserEditorSurface = newSplit(at: anchor, direction: .right, baseConfig: config)
+            fileBrowserEditorSocket = nil
         }
+    }
+
+    /// Removes the legacy Vim/Neovim split when the native editor takes over.
+    @MainActor
+    func closeFileBrowserEditorSplit() {
+        if let editorSurface = fileBrowserEditorSurface,
+           surfaceTree.contains(editorSurface) {
+            closeSurface(editorSurface, withConfirmation: false)
+        }
+
+        if let socket = fileBrowserEditorSocket {
+            try? FileManager.default.removeItem(atPath: socket)
+            try? FileManager.default.removeItem(atPath: socket + ".lua")
+        }
+
+        fileBrowserEditorSurface = nil
+        fileBrowserEditorSocket = nil
     }
 
     private enum EditorExecutable {
@@ -644,6 +771,7 @@ extension TerminalController {
 
     vim.api.nvim_set_hl(0, "GhosttyEditorIconJS", { fg = "#f7df1e", bold = true })
     vim.api.nvim_set_hl(0, "GhosttyEditorIconTS", { fg = "#4daafc", bold = true })
+    vim.api.nvim_set_hl(0, "GhosttyEditorIconSQL", { fg = "#22d3ee", bold = true })
 
     _G.GhosttyEditorCloseTab = function(tab, _, button, _)
       if button ~= "l" then return end
@@ -683,6 +811,9 @@ extension TerminalController {
         elseif extension == "ts" or extension == "tsx" then
           icon = "TS"
           iconHighlight = "GhosttyEditorIconTS"
+        elseif extension == "sql" then
+          icon = "SQL"
+          iconHighlight = "GhosttyEditorIconSQL"
         end
 
         local modified = vim.bo[buffer].modified and " ●" or ""

@@ -6552,18 +6552,6 @@ pub const Keybinds = struct {
             .{ .open_config = .default },
         );
 
-        // Momok uses a Quake-style quick terminal as its floating terminal.
-        // Keep the shell alive while it is hidden, and make it available with
-        // the familiar Cmd+` shortcut even while another application is active.
-        if (comptime builtin.target.os.tag.isDarwin()) {
-            try self.set.putFlags(
-                alloc,
-                .{ .key = .{ .unicode = '`' }, .mods = .{ .super = true } },
-                .{ .toggle_quick_terminal = {} },
-                .{ .global = true },
-            );
-        }
-
         {
             try self.set.put(
                 alloc,

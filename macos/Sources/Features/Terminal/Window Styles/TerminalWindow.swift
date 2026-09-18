@@ -50,6 +50,10 @@ class TerminalWindow: NSWindow {
         true
     }
 
+    /// True when Momok handled the minimize action by hiding this window behind
+    /// the single application icon instead of adding another Dock tile.
+    private(set) var isHiddenInApplicationIcon = false
+
     /// Glass effect view for liquid glass background when transparency is enabled
     private var glassEffectView: NSView?
 
@@ -69,6 +73,33 @@ class TerminalWindow: NSWindow {
     }
 
     // MARK: NSWindow Overrides
+
+    override func performMiniaturize(_ sender: Any?) {
+        hideInApplicationIcon(sender)
+    }
+
+    override func miniaturize(_ sender: Any?) {
+        hideInApplicationIcon(sender)
+    }
+
+    /// Restore a window hidden by `performMiniaturize` when the application icon
+    /// is clicked. This keeps minimize scoped to Momok without changing the
+    /// user's global Dock preference.
+    func restoreFromApplicationIcon(makeKey: Bool) {
+        guard isHiddenInApplicationIcon else { return }
+        isHiddenInApplicationIcon = false
+        if makeKey {
+            makeKeyAndOrderFront(nil)
+        } else {
+            orderFront(nil)
+        }
+    }
+
+    private func hideInApplicationIcon(_ sender: Any?) {
+        guard styleMask.contains(.miniaturizable), !isMiniaturized else { return }
+        isHiddenInApplicationIcon = true
+        orderOut(sender)
+    }
 
     override var toolbar: NSToolbar? {
         didSet {

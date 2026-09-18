@@ -165,14 +165,26 @@ pub fn init(
         break :open open;
     };
 
-    // Our step to copy the app bundle to the install path.
-    // We have to use `cp -R` because there are symlinks in the
-    // bundle.
+    // Local builds replace the single canonical app used by the Dock. CI keeps
+    // the traditional zig-out copy so packaging jobs remain self-contained.
     const copy = copy: {
-        const step = RunStep.create(b, "copy app bundle");
-        step.addArgs(&.{ "cp", "-R" });
-        step.addFileArg(b.path(app_path));
-        step.addArg(b.fmt("{s}", .{b.install_path}));
+        const step = RunStep.create(b, if (env.get("CI") == null)
+            "install Momok in Applications"
+        else
+            "copy app bundle");
+
+        if (env.get("CI") == null) {
+            step.addArgs(&.{"/bin/bash"});
+            step.addFileArg(b.path("install.sh"));
+            step.addArg("--app");
+            step.addFileArg(b.path(app_path));
+        } else {
+            // We have to use `cp -R` because there are symlinks in the bundle.
+            step.addArgs(&.{ "cp", "-R" });
+            step.addFileArg(b.path(app_path));
+            step.addArg(b.fmt("{s}", .{b.install_path}));
+        }
+
         step.step.dependOn(&build.step);
         break :copy step;
     };

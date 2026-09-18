@@ -7,9 +7,14 @@ def main [
     --scheme: string = "Ghostty"       # Xcode scheme (Ghostty, DockTilePlugin)
     --configuration: string = "Debug"  # Build configuration (Debug, Release, ReleaseLocal)
     --action: string = "build"         # xcodebuild action (build, test, clean, etc.)
+    --skip-install                      # Keep the build product without replacing /Applications/Momok.app
 ] {
     let project = ($env.FILE_PWD | path join "Ghostty.xcodeproj")
     let build_dir = ($env.FILE_PWD | path join "build")
+    let repository = ($env.FILE_PWD | path dirname)
+
+    mkdir $build_dir
+    touch ($build_dir | path join ".metadata_never_index")
 
     # Skip UI tests for CLI-based invocations because it requires
     # special permissions.
@@ -29,4 +34,9 @@ def main [
         $"SYMROOT=($build_dir)"
         ...$skip_testing
         $action)
+
+    if $action == "build" and $scheme == "Ghostty" and not $skip_install {
+        let built_app = ($build_dir | path join $configuration "Momok.app")
+        ^/bin/bash ($repository | path join "install.sh") --app $built_app
+    }
 }

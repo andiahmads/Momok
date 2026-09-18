@@ -144,6 +144,26 @@ private struct ImageDocumentView: View {
     }
 }
 
+struct MarkdownContentView: View {
+    private let blocks: [MarkdownBlock]
+    private let baseURL: URL
+
+    init(source: String, baseURL: URL) {
+        blocks = MarkdownParser.parse(source)
+        self.baseURL = baseURL
+    }
+
+    var body: some View {
+        LazyVStack(alignment: .leading, spacing: 14) {
+            ForEach(blocks) { block in
+                MarkdownBlockView(block: block, baseURL: baseURL)
+            }
+        }
+        .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
 private struct MarkdownDocumentView: View {
     let url: URL
     let refreshID: UUID

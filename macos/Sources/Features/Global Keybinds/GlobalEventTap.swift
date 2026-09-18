@@ -121,6 +121,109 @@ class GlobalEventTap {
     }
 }
 
+/// Registers Momok's default floating-terminal shortcut through the legacy
+/// Carbon hotkey API. Unlike a CGEvent tap, this works globally without asking
+/// the user for Accessibility or Input Monitoring permission.
+final class QuickTerminalGlobalHotKey {
+    private static let signature: OSType = 0x4D4F4D4B // "MOMK"
+    private static let identifiers = Set<UInt32>(1...4)
+
+    private var eventHandler: EventHandlerRef?
+    private var hotKeys: [EventHotKeyRef] = []
+    private var action: (() -> Void)?
+    private let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier!,
+        category: String(describing: QuickTerminalGlobalHotKey.self)
+    )
+
+    init() {
+        var eventType = EventTypeSpec(
+            eventClass: OSType(kEventClassKeyboard),
+            eventKind: UInt32(kEventHotKeyPressed)
+        )
+        let userData = Unmanaged.passUnretained(self).toOpaque()
+        InstallEventHandler(
+            GetApplicationEventTarget(),
+            { _, event, userData in
+                guard let event, let userData else { return OSStatus(eventNotHandledErr) }
+
+                var identifier = EventHotKeyID()
+                let status = GetEventParameter(
+                    event,
+                    EventParamName(kEventParamDirectObject),
+                    EventParamType(typeEventHotKeyID),
+                    nil,
+                    MemoryLayout<EventHotKeyID>.size,
+                    nil,
+                    &identifier
+                )
+                guard status == noErr,
+                      identifier.signature == QuickTerminalGlobalHotKey.signature,
+                      QuickTerminalGlobalHotKey.identifiers.contains(identifier.id)
+                else { return OSStatus(eventNotHandledErr) }
+
+                let hotKey = Unmanaged<QuickTerminalGlobalHotKey>
+                    .fromOpaque(userData)
+                    .takeUnretainedValue()
+                hotKey.logger.info("received floating terminal hotkey id=\(identifier.id)")
+                DispatchQueue.main.async { hotKey.action?() }
+                return noErr
+            },
+            1,
+            &eventType,
+            userData,
+            &eventHandler
+        )
+    }
+
+    deinit {
+        unregister()
+        if let eventHandler { RemoveEventHandler(eventHandler) }
+    }
+
+    func register(action: @escaping () -> Void) {
+        unregister()
+        self.action = nil
+
+        let variants: [(keyCode: UInt32, modifiers: UInt32)] = [
+            (UInt32(kVK_ANSI_Grave), UInt32(cmdKey)),
+            (UInt32(kVK_ANSI_Grave), UInt32(cmdKey | shiftKey)),
+            (UInt32(kVK_ISO_Section), UInt32(cmdKey)),
+            (UInt32(kVK_ISO_Section), UInt32(cmdKey | shiftKey)),
+        ]
+        for (index, variant) in variants.enumerated() {
+            var reference: EventHotKeyRef?
+            let identifier = EventHotKeyID(
+                signature: Self.signature,
+                id: UInt32(index + 1)
+            )
+            let status = RegisterEventHotKey(
+                variant.keyCode,
+                variant.modifiers,
+                identifier,
+                GetApplicationEventTarget(),
+                0,
+                &reference
+            )
+            if status == noErr, let reference {
+                hotKeys.append(reference)
+            } else {
+                logger.error(
+                    "failed to register floating hotkey id=\(identifier.id) status=\(status)"
+                )
+            }
+        }
+        guard !hotKeys.isEmpty else { return }
+        self.action = action
+        logger.info("registered \(self.hotKeys.count) floating terminal hotkey variants")
+    }
+
+    private func unregister() {
+        hotKeys.forEach { UnregisterEventHotKey($0) }
+        hotKeys.removeAll(keepingCapacity: true)
+    }
+}
+
 private func cgEventFlagsChangedHandler(
     proxy: CGEventTapProxy,
     type: CGEventType,
