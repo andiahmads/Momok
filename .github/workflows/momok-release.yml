@@ -79,7 +79,7 @@ jobs:
           codesign --verify --deep --strict --verbose=2 macos/build/ReleaseLocal/Momok.app
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' macos/build/ReleaseLocal/Momok.app/Contents/Info.plist)" = "com.andiahmads.momok"
           file macos/build/ReleaseLocal/Momok.app/Contents/MacOS/ghostty
-          lipo -verify_arch arm64 x86_64 macos/build/ReleaseLocal/Momok.app/Contents/MacOS/ghostty
+          lipo macos/build/ReleaseLocal/Momok.app/Contents/MacOS/ghostty -verify_arch arm64 x86_64
 
       - name: Package app and checksum
         run: |
