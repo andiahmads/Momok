@@ -83,13 +83,30 @@ if [ "${1:-}" = "--app" ]; then
   [ "$LOCAL_APP" != "$APP_PATH" ] || fail "Bundle sumber harus berbeda dari $APP_PATH."
   BUILT_APP="$LOCAL_APP"
 elif [ "$#" -eq 0 ]; then
-  say "Mengunduh Momok versi terbaru..."
-  DOWNLOAD_URL="https://github.com/$REPOSITORY/releases/latest/download/$ARCHIVE_NAME"
+  say "Memeriksa build Momok terbaru yang berhasil dirilis..."
+  # Resolve latest once so the archive and checksum cannot come from different
+  # releases when a new build is published during the download.
+  RELEASE_URL="$(curl -fsSLI --retry 3 -o /dev/null -w '%{url_effective}' "https://github.com/$REPOSITORY/releases/latest")" \
+    || fail "Tidak dapat memeriksa release terbaru. Cek koneksi internet."
+  case "$RELEASE_URL" in
+    "https://github.com/$REPOSITORY/releases/tag/"*) ;;
+    *) fail "Alamat release tidak valid: $RELEASE_URL" ;;
+  esac
+  RELEASE_TAG="${RELEASE_URL##*/}"
+  DOWNLOAD_URL="https://github.com/$REPOSITORY/releases/download/$RELEASE_TAG/$ARCHIVE_NAME"
+  say "Mengunduh Momok $RELEASE_TAG..."
   TEMP_DIR="$(mktemp -d /tmp/momok-installer.XXXXXX)"
 
   if ! curl -fL --retry 3 --progress-bar "$DOWNLOAD_URL" -o "$TEMP_DIR/$ARCHIVE_NAME"; then
     fail "Release Momok belum tersedia atau koneksi internet bermasalah. Coba lagi beberapa saat."
   fi
+
+  curl -fsSL --retry 3 "$DOWNLOAD_URL.sha256" -o "$TEMP_DIR/$ARCHIVE_NAME.sha256" \
+    || fail "Checksum release tidak tersedia. Aplikasi lama tidak diubah."
+  EXPECTED_CHECKSUM="$(awk 'NR == 1 {print $1}' "$TEMP_DIR/$ARCHIVE_NAME.sha256")"
+  [[ "$EXPECTED_CHECKSUM" =~ ^[[:xdigit:]]{64}$ ]] || fail "Format checksum release tidak valid."
+  ACTUAL_CHECKSUM="$(shasum -a 256 "$TEMP_DIR/$ARCHIVE_NAME" | awk '{print $1}')"
+  [ "$ACTUAL_CHECKSUM" = "$EXPECTED_CHECKSUM" ] || fail "Checksum download tidak cocok. Aplikasi lama tidak diubah."
 
   ditto -x -k "$TEMP_DIR/$ARCHIVE_NAME" "$TEMP_DIR/unpacked"
   BUILT_APP="$TEMP_DIR/unpacked/Momok.app"
@@ -101,6 +118,11 @@ fi
 BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$BUILT_APP/Contents/Info.plist" 2>/dev/null || true)"
 [ "$BUNDLE_ID" = "$EXPECTED_BUNDLE_ID" ] || fail "Bundle ID tidak valid: ${BUNDLE_ID:-tidak ditemukan}."
 [ -x "$BUILT_APP/Contents/MacOS/ghostty" ] || fail "Executable Momok tidak ditemukan."
+if [ -z "$LOCAL_APP" ]; then
+  codesign --verify --deep --strict "$BUILT_APP" || fail "Signature aplikasi hasil download tidak valid."
+fi
+APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$BUILT_APP/Contents/Info.plist" 2>/dev/null || true)"
+APP_COMMIT="$(/usr/libexec/PlistBuddy -c 'Print :GhosttyCommit' "$BUILT_APP/Contents/Info.plist" 2>/dev/null || true)"
 
 if [ -n "$LOCAL_APP" ]; then
   BUILD_ROOT="$(dirname "$(dirname "$LOCAL_APP")")"
@@ -176,4 +198,5 @@ open "$APP_PATH"
 
 say "Momok berhasil di-install dan sudah dibuka."
 printf '%s\n' "Aplikasi: $APP_PATH"
+printf '%s\n' "Versi: ${APP_VERSION:-tidak diketahui} | Commit: ${APP_COMMIT:-tidak diketahui}"
 printf '%s\n' "Untuk update, jalankan kembali perintah installer yang sama."

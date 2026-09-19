@@ -88,6 +88,17 @@ Installer akan mengunduh aplikasi universal terbaru, memasangnya ke Applications
 dan membuka Momok secara otomatis. Perintah yang sama juga digunakan untuk
 update.
 
+Setiap push ke `main` otomatis memulai build universal dan menerbitkan GitHub
+Release baru setelah build berhasil. Installer mengambil **build terbaru yang
+sudah berhasil dirilis**, bukan source code yang masih dibangun. Jika build
+gagal, release sebelumnya tetap tersedia. ZIP dan checksum diambil dari tag
+release yang sama, lalu checksum dan signature diperiksa sebelum aplikasi lama
+diganti. Installer menampilkan versi dan commit yang dipasang.
+
+Tidak perlu menghapus Momok lama. Jalankan kembali perintah di atas setelah
+workflow **Momok macOS Release** selesai. Ini memperbarui distribusi installer;
+aplikasi yang sudah berjalan tidak memperbarui dirinya secara otomatis.
+
 > [!NOTE]
 >
 > Binary GitHub Release memakai ad-hoc signature tetapi belum dinotariskan oleh

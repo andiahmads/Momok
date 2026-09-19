@@ -2,6 +2,8 @@ name: Momok macOS Release
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "momok-v*"
   workflow_dispatch:
@@ -9,14 +11,33 @@ on:
 permissions:
   contents: write
 
+# Serialize publication so a slower old build cannot replace a newer release.
+concurrency:
+  group: momok-macos-release
+  cancel-in-progress: false
+
 jobs:
   build-macos:
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/momok-v')
     runs-on: macos-26
     timeout-minutes: 90
 
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
+
+      - name: Identify release
+        id: release
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/momok-v* ]]; then
+            release_tag="$GITHUB_REF_NAME"
+            release_version="${release_tag#momok-v}"
+          else
+            release_tag="momok-main-${GITHUB_RUN_NUMBER}-${GITHUB_SHA:0:7}-${GITHUB_RUN_ATTEMPT}"
+            release_version="0.1.2-main.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+          fi
+          printf 'tag=%s\nversion=%s\n' "$release_tag" "$release_version" >> "$GITHUB_OUTPUT"
 
       - name: Install Zig
         uses: mlugg/setup-zig@v2
@@ -28,10 +49,27 @@ jobs:
           xcodebuild -version
           zig version
 
-      - name: Build universal Release app
+      - name: Install Nushell
+        run: command -v nu >/dev/null || brew install nushell
+
+      - name: Build universal Release core
         env:
-          MOMOK_VERSION: ${{ startsWith(github.ref, 'refs/tags/momok-v') && github.ref_name || 'momok-dev' }}
-        run: zig build -Doptimize=ReleaseFast -Dversion-string="${MOMOK_VERSION#momok-v}"
+          MOMOK_VERSION: ${{ steps.release.outputs.version }}
+        run: zig build -Doptimize=ReleaseFast -Demit-macos-app=false -Dversion-string="$MOMOK_VERSION"
+
+      - name: Build Release app without installing on runner
+        run: nu macos/build.nu --configuration ReleaseLocal --skip-install
+
+      - name: Record release provenance
+        env:
+          MOMOK_RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          MOMOK_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          app_plist="macos/build/ReleaseLocal/Momok.app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${MOMOK_VERSION%%-*}" "$app_plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}" "$app_plist"
+          /usr/libexec/PlistBuddy -c "Set :GhosttyCommit $GITHUB_SHA" "$app_plist"
+          /usr/libexec/PlistBuddy -c "Add :MomokReleaseTag string $MOMOK_RELEASE_TAG" "$app_plist"
 
       - name: Apply ad-hoc signature
         run: codesign --force --deep --sign - macos/build/ReleaseLocal/Momok.app
@@ -41,6 +79,7 @@ jobs:
           codesign --verify --deep --strict --verbose=2 macos/build/ReleaseLocal/Momok.app
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' macos/build/ReleaseLocal/Momok.app/Contents/Info.plist)" = "com.andiahmads.momok"
           file macos/build/ReleaseLocal/Momok.app/Contents/MacOS/ghostty
+          lipo -verify_arch arm64 x86_64 macos/build/ReleaseLocal/Momok.app/Contents/MacOS/ghostty
 
       - name: Package app and checksum
         run: |
@@ -56,11 +95,21 @@ jobs:
             Momok-macOS-universal.zip.sha256
 
       - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/momok-v')
-        uses: softprops/action-gh-release@v2
-        with:
-          generate_release_notes: true
-          prerelease: false
-          files: |
-            Momok-macOS-universal.zip
-            Momok-macOS-universal.zip.sha256
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          MOMOK_RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          main_sha="$(gh api "repos/$GH_REPO/commits/main" --jq .sha)"
+          if [[ "$GITHUB_REF" == refs/heads/main && "$GITHUB_SHA" != "$main_sha" ]]; then
+            echo "A newer commit is queued; keep the last successful release until that build finishes."
+            exit 0
+          fi
+          latest=false
+          if [[ "$GITHUB_SHA" == "$main_sha" ]]; then latest=true; fi
+          gh release create "$MOMOK_RELEASE_TAG" \
+            Momok-macOS-universal.zip Momok-macOS-universal.zip.sha256 \
+            --target "$GITHUB_SHA" \
+            --title "Momok $MOMOK_RELEASE_TAG" \
+            --notes "Build from commit $GITHUB_SHA. Re-run install.sh to install this version. This build uses an ad-hoc signature and is not notarized." \
+            --latest="$latest"
