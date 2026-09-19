@@ -1136,42 +1136,54 @@ private final class IssueWorkspaceModel: ObservableObject {
         let generation = UUID()
         let rootURL = rootURL
         detailGeneration = generation
-        isLoadingDetail = true
+        isLoadingDetail = detail == nil
         isLoadingMetadata = true
+        isLoadingMentions = true
         detailError = nil
 
+        // Metadata includes several independent GitHub requests. Publish the
+        // conversation as soon as it arrives rather than waiting for the sidebar.
+        async let metadataTask: Void = loadMetadata(for: issue, from: rootURL, generation: generation)
         do {
-            async let updatedTask = Task.detached(priority: .userInitiated) {
+            let updated = try await Task.detached(priority: .userInitiated) {
                 try IssueGitHubCLI.loadDetail(for: issue, from: rootURL)
             }.value
-            async let metadataTask = Task.detached(priority: .utility) {
-                try IssueGitHubCLI.loadMetadata(for: issue, from: rootURL)
-            }.value
-            let (updated, metadataPayload) = try await (updatedTask, metadataTask)
             guard generation == detailGeneration else { return }
             detail = updated
-            metadata = metadataPayload.metadata
-            metadataOptions = metadataPayload.options
-            mentions = updated.mentionableUsers
+            mentions = PullRequestMention.merged(mentions + updated.mentionableUsers)
             isLoadingDetail = false
-            isLoadingMetadata = false
-
-            isLoadingMentions = true
-            let repositoryUsers = await Task.detached(priority: .utility) {
-                (try? IssueGitHubCLI.loadMentionableUsers(
-                    repository: issue.repository,
-                    from: rootURL)) ?? []
-            }.value
-            guard generation == detailGeneration else { return }
-            mentions = PullRequestMention.merged(repositoryUsers + updated.mentionableUsers)
-            isLoadingMentions = false
         } catch {
             guard generation == detailGeneration else { return }
-            detail = nil
             isLoadingDetail = false
-            isLoadingMetadata = false
-            isLoadingMentions = false
-            detailError = IssueError.userMessage(for: error)
+            if detail == nil {
+                detailError = IssueError.userMessage(for: error)
+            } else {
+                actionMessage = IssueError.userMessage(for: error)
+            }
+        }
+        await metadataTask
+    }
+
+    private func loadMetadata(for issue: IssueSummary, from rootURL: URL?, generation: UUID) async {
+        defer {
+            if generation == detailGeneration {
+                isLoadingMetadata = false
+                isLoadingMentions = false
+            }
+        }
+        do {
+            let payload = try await Task.detached(priority: .utility) {
+                try IssueGitHubCLI.loadMetadata(for: issue, from: rootURL)
+            }.value
+            guard generation == detailGeneration else { return }
+            metadata = payload.metadata
+            metadataOptions = payload.options
+            // These are the same repository members used by mention autocomplete;
+            // reuse them instead of fetching collaborators a second time.
+            mentions = PullRequestMention.merged(mentions + payload.options.assignees)
+        } catch {
+            guard generation == detailGeneration else { return }
+            actionMessage = "Could not load issue metadata: \(IssueError.userMessage(for: error))"
         }
     }
 

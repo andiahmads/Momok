@@ -44,11 +44,14 @@ struct TerminalFileBrowser: View {
         .onAppear {
             model.setRoot(rootURL)
             branchModel.setRoot(rootURL)
+            model.search(searchText)
         }
         .onChange(of: rootURL) {
             model.setRoot($0)
             branchModel.setRoot($0)
         }
+        .onChange(of: searchText) { model.search($0) }
+        .onDisappear { model.cancelSearch() }
     }
 
     private var header: some View {
@@ -151,8 +154,17 @@ struct TerminalFileBrowser: View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
-            TextField("Filter files...", text: $searchText)
+            TextField("Search files and folders...", text: $searchText)
                 .textFieldStyle(.plain)
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                }
+                .buttonStyle(.plain)
+                .help("Clear File Search")
+            }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
@@ -171,13 +183,14 @@ struct TerminalFileBrowser: View {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     FileBrowserRootRow(root: root, model: model)
 
-                    if model.isExpanded(root) {
-                        ForEach(model.filteredChildren(of: root, matching: searchText)) { entry in
+                    if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        searchResults(root: root)
+                    } else if model.isExpanded(root) {
+                        ForEach(model.children(of: root)) { entry in
                             FileBrowserRow(
                                 entry: entry,
                                 depth: 1,
                                 model: model,
-                                searchText: searchText,
                                 openFile: openFile)
                         }
                     }
@@ -198,6 +211,59 @@ struct TerminalFileBrowser: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    private func searchResults(root: URL) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if model.isSearching {
+                ProgressView("Searching subfolders…")
+                    .controlSize(.small)
+            } else if model.searchResults.isEmpty {
+                Text("No matching files or folders")
+                    .foregroundStyle(.secondary)
+            }
+            Text("Search includes subfolders; Git internals and dependency/build caches are skipped.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            if let notice = model.searchNotice {
+                Text(notice).font(.caption).foregroundStyle(.secondary)
+            }
+            ForEach(model.searchResults) { entry in
+                Button {
+                    model.select(entry.url)
+                    if entry.isDirectory {
+                        model.reveal(entry.url)
+                        searchText = ""
+                    } else {
+                        openFile(entry.url)
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: entry.isDirectory ? "folder" : entry.iconName)
+                            .foregroundStyle(entry.isDirectory ? Color.secondary : entry.iconColor)
+                            .frame(width: 16)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(entry.name).lineLimit(1)
+                            Text(String(entry.url.path.dropFirst(root.path.count + (root.path == "/" ? 0 : 1))))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.vertical, 4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .backport.pointerStyle(.link)
+                .help(entry.url.path)
+                .accessibilityLabel("Open \(entry.name)")
+            }
+        }
+        .font(.system(size: 12))
+        .padding(10)
     }
 
     private var resizeHandle: some View {
@@ -302,7 +368,6 @@ private struct FileBrowserRow: View {
     let entry: TerminalFileBrowserModel.Entry
     let depth: Int
     @ObservedObject var model: TerminalFileBrowserModel
-    let searchText: String
     let openFile: (URL) -> Void
 
     @State private var hovering = false
@@ -370,12 +435,11 @@ private struct FileBrowserRow: View {
                         .padding(.leading, CGFloat(depth + 1) * 16 + 34)
                         .frame(height: 26)
                 } else {
-                    ForEach(model.filteredChildren(of: entry.url, matching: searchText)) { child in
+                    ForEach(model.children(of: entry.url)) { child in
                         FileBrowserRow(
                             entry: child,
                             depth: depth + 1,
                             model: model,
-                            searchText: searchText,
                             openFile: openFile)
                     }
                 }
@@ -436,6 +500,7 @@ private final class TerminalFileBrowserModel: ObservableObject {
             case "md", "txt": return "doc.text"
             case "png", "jpg", "jpeg", "gif", "webp", "svg": return "photo"
             case "js", "ts", "tsx", "jsx": return "j.square"
+            case "html", "htm", "svelte", "vue": return "chevron.left.forwardslash.chevron.right"
             default: return "doc"
             }
         }
@@ -445,6 +510,8 @@ private final class TerminalFileBrowserModel: ObservableObject {
             case "swift": return .orange
             case "js", "jsx": return .yellow
             case "ts", "tsx": return .blue
+            case "html", "htm", "svelte": return .orange
+            case "vue": return .green
             case "json", "yaml", "yml", "toml": return .yellow
             case "sql": return .cyan
             default: return .secondary
@@ -453,10 +520,22 @@ private final class TerminalFileBrowserModel: ObservableObject {
     }
 
     @Published private(set) var root: URL?
-    @Published private var children: [URL: [Entry]] = [:]
+    @Published private var directoryChildren: [URL: [Entry]] = [:]
     @Published private var expanded: Set<URL> = []
     @Published private var loading: Set<URL> = []
     @Published private var selected: URL?
+    @Published private(set) var searchResults: [Entry] = []
+    @Published private(set) var isSearching = false
+    @Published private(set) var searchNotice: String?
+    private var searchQuery = ""
+    private var searchGeneration = UUID()
+    private var searchTask: Task<SearchResult, Never>?
+
+    private struct SearchResult: Sendable {
+        var entries: [Entry] = []
+        var truncated = false
+        var unreadable = false
+    }
 
     func setRoot(_ url: URL?) {
         // Moving focus to sidebar controls or a newly-created terminal split can
@@ -465,19 +544,21 @@ private final class TerminalFileBrowserModel: ObservableObject {
         guard let normalized = url?.standardizedFileURL else { return }
         guard normalized != root else { return }
         root = normalized
-        children.removeAll()
+        directoryChildren.removeAll()
         expanded = [normalized]
         loading.removeAll()
         selected = nil
         load(normalized)
+        search(searchQuery)
     }
 
     func reload() {
         guard let root else { return }
         let directories = [root] + Array(expanded)
-        children.removeAll()
+        directoryChildren.removeAll()
         loading.removeAll()
         directories.forEach { load($0) }
+        search(searchQuery)
     }
 
     func isExpanded(_ url: URL) -> Bool { expanded.contains(url) }
@@ -562,19 +643,90 @@ private final class TerminalFileBrowserModel: ObservableObject {
     func toggle(_ url: URL) {
         if expanded.remove(url) == nil {
             expanded.insert(url)
-            if children[url] == nil { load(url) }
+            if directoryChildren[url] == nil { load(url) }
         }
     }
 
-    func filteredChildren(of url: URL, matching query: String) -> [Entry] {
-        let entries = children[url] ?? []
-        guard !query.isEmpty else { return entries }
-        return entries.filter { $0.name.localizedCaseInsensitiveContains(query) }
+    func children(of url: URL) -> [Entry] { directoryChildren[url] ?? [] }
+
+    func reveal(_ url: URL) {
+        guard let root else { return }
+        var directory = url
+        while directory.path == root.path || directory.path.hasPrefix(root.path == "/" ? "/" : root.path + "/") {
+            expanded.insert(directory)
+            load(directory)
+            if directory == root { break }
+            directory = directory.deletingLastPathComponent()
+        }
+    }
+
+    func cancelSearch() {
+        searchTask?.cancel()
+        searchTask = nil
+        searchGeneration = UUID()
+        isSearching = false
+    }
+
+    func search(_ query: String) {
+        cancelSearch()
+        searchQuery = query
+        searchResults = []
+        searchNotice = nil
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let root, !query.isEmpty else { return }
+        isSearching = true
+        let generation = searchGeneration
+        let task = Task.detached(priority: .userInitiated) {
+            do { try await Task.sleep(nanoseconds: 200_000_000) } catch { return SearchResult() }
+            return Self.findMatches(in: root, query: query)
+        }
+        searchTask = task
+        Task { [weak self] in
+            let result = await task.value
+            guard let self, self.searchGeneration == generation else { return }
+            self.searchResults = result.entries
+            self.isSearching = false
+            self.searchTask = nil
+            self.searchNotice = result.truncated ? "Showing the first 500 matches. Refine your search for more specific results."
+                : result.unreadable ? "Some folders could not be read." : nil
+        }
+    }
+
+    nonisolated private static func findMatches(in root: URL, query: String) -> SearchResult {
+        let keys: Set<URLResourceKey> = [.isDirectoryKey, .isHiddenKey, .isSymbolicLinkKey, .nameKey]
+        let skipped: Set<String> = [".git", "node_modules", ".nuxt", ".output", ".svelte-kit", ".zig-cache"]
+        var result = SearchResult()
+        guard let enumerator = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: Array(keys),
+            options: [.skipsPackageDescendants],
+            errorHandler: { _, _ in result.unreadable = true; return !Task.isCancelled }
+        ) else { return SearchResult(unreadable: true) }
+        for case let url as URL in enumerator {
+            if Task.isCancelled { return SearchResult() }
+            guard let values = try? url.resourceValues(forKeys: keys) else {
+                result.unreadable = true
+                continue
+            }
+            let isDirectory = values.isDirectory ?? false
+            if isDirectory && (skipped.contains(url.lastPathComponent) || values.isSymbolicLink == true) {
+                enumerator.skipDescendants()
+            }
+            let name = values.name ?? url.lastPathComponent
+            guard name.localizedCaseInsensitiveContains(query) else { continue }
+            if result.entries.count == 500 {
+                result.truncated = true
+                break
+            }
+            result.entries.append(Entry(url: url, name: name, isDirectory: isDirectory, isHidden: values.isHidden ?? false))
+        }
+        result.entries.sort { $0.url.path.localizedStandardCompare($1.url.path) == .orderedAscending }
+        return result
     }
 
     private func load(_ url: URL, force: Bool = false) {
         if force {
-            children[url] = nil
+            directoryChildren[url] = nil
             loading.remove(url)
         }
         guard !loading.contains(url) else { return }
@@ -602,7 +754,7 @@ private final class TerminalFileBrowserModel: ObservableObject {
                 }
             }.value
 
-            children[url] = entries
+            directoryChildren[url] = entries
             loading.remove(url)
         }
     }

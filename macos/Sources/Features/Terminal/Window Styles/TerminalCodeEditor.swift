@@ -6,6 +6,11 @@ enum TerminalCodeLanguage: String, CaseIterable {
     case cpp = "C++"
     case javascript = "JavaScript"
     case typescript = "TypeScript"
+    case jsx = "JavaScript React"
+    case tsx = "TypeScript React"
+    case html = "HTML"
+    case svelte = "Svelte"
+    case vue = "Vue / Nuxt"
     case go = "Go"
     case rust = "Rust"
     case json = "JSON"
@@ -18,8 +23,13 @@ enum TerminalCodeLanguage: String, CaseIterable {
         switch url.pathExtension.lowercased() {
         case "c", "h": return .c
         case "cc", "cpp", "cxx", "hh", "hpp", "hxx": return .cpp
-        case "js", "jsx", "mjs", "cjs": return .javascript
-        case "ts", "tsx", "mts", "cts": return .typescript
+        case "js", "mjs", "cjs": return .javascript
+        case "ts", "mts", "cts": return .typescript
+        case "jsx": return .jsx
+        case "tsx": return .tsx
+        case "html", "htm": return .html
+        case "svelte": return .svelte
+        case "vue": return .vue
         case "go": return .go
         case "rs": return .rust
         case "json", "jsonc": return .json
@@ -1151,7 +1161,16 @@ private enum CodeSyntaxHighlighter {
             result.append(Rule(#"<\?(?:php)?|\?>"#, color: .systemPurple))
         }
 
-        if language == .javascript || language == .typescript {
+        let hasMarkup = [.html, .svelte, .vue, .jsx, .tsx].contains(language)
+        if hasMarkup {
+            result.append(Rule(#"</?[A-Za-z][\w:.-]*\b|/?>"#, color: .systemPink))
+            result.append(Rule(#"[\w@:#][\w@:.-]*(?=\s*=)"#, color: .systemBlue))
+            result.append(Rule(#"<!DOCTYPE\b[^>]*>"#, color: .systemPurple, options: [.caseInsensitive]))
+        }
+        if language == .svelte {
+            result.append(Rule(#"\{[#:/@](?:if|else|each|await|then|catch|key|snippet|render|html|debug|const)\b"#, color: .systemPurple))
+        }
+        if [.javascript, .typescript, .jsx, .tsx, .vue, .svelte].contains(language) {
             result.append(Rule(#"`(?:\\.|[^`\\])*`"#, color: .systemGreen))
         }
         result.append(Rule(#"\"(?:\\.|[^\"\\])*\""#, color: .systemGreen))
@@ -1174,9 +1193,14 @@ private enum CodeSyntaxHighlighter {
         case .sql:
             result.append(Rule(#"--.*$"#, color: .secondaryLabelColor, options: [.anchorsMatchLines]))
             result.append(Rule(#"/\*[\s\S]*?\*/"#, color: .secondaryLabelColor))
+        case .html:
+            break
         default:
             result.append(Rule(#"//.*$"#, color: .secondaryLabelColor, options: [.anchorsMatchLines]))
             result.append(Rule(#"/\*[\s\S]*?\*/"#, color: .secondaryLabelColor))
+        }
+        if hasMarkup {
+            result.append(Rule(#"<!--[\s\S]*?-->"#, color: .secondaryLabelColor))
         }
         return result
     }
@@ -1187,7 +1211,7 @@ private enum CodeSyntaxHighlighter {
             return ["auto", "break", "case", "const", "continue", "default", "do", "else", "enum", "extern", "for", "goto", "if", "register", "return", "sizeof", "static", "struct", "switch", "typedef", "union", "volatile", "while"]
         case .cpp:
             return ["alignas", "break", "case", "catch", "class", "concept", "const", "constexpr", "continue", "default", "delete", "do", "else", "enum", "explicit", "export", "for", "friend", "if", "namespace", "new", "noexcept", "operator", "private", "protected", "public", "requires", "return", "static", "struct", "switch", "template", "this", "throw", "try", "using", "virtual", "while"]
-        case .javascript, .typescript:
+        case .javascript, .typescript, .jsx, .tsx, .vue, .svelte:
             return ["async", "await", "break", "case", "catch", "class", "const", "continue", "debugger", "default", "delete", "do", "else", "export", "extends", "finally", "for", "from", "function", "if", "import", "in", "instanceof", "let", "new", "of", "return", "static", "super", "switch", "throw", "try", "typeof", "var", "void", "while", "with", "yield"]
         case .go:
             return ["break", "case", "chan", "const", "continue", "default", "defer", "else", "fallthrough", "for", "func", "go", "goto", "if", "import", "interface", "map", "package", "range", "return", "select", "struct", "switch", "type", "var"]
@@ -1199,7 +1223,7 @@ private enum CodeSyntaxHighlighter {
             return ["and", "as", "assert", "async", "await", "break", "class", "continue", "def", "del", "elif", "else", "except", "finally", "for", "from", "global", "if", "import", "in", "is", "lambda", "nonlocal", "not", "or", "pass", "raise", "return", "try", "while", "with", "yield"]
         case .sql:
             return ["add", "all", "alter", "and", "as", "asc", "begin", "between", "by", "case", "check", "column", "commit", "constraint", "create", "database", "default", "delete", "desc", "distinct", "drop", "else", "end", "except", "exists", "foreign", "from", "full", "group", "having", "if", "in", "index", "inner", "insert", "intersect", "into", "is", "join", "key", "left", "like", "limit", "not", "null", "offset", "on", "or", "order", "outer", "primary", "references", "returning", "right", "rollback", "select", "set", "table", "then", "transaction", "trigger", "truncate", "union", "unique", "update", "using", "values", "view", "when", "where", "with"]
-        case .json, .yaml:
+        case .json, .yaml, .html:
             return []
         }
     }
@@ -1208,9 +1232,9 @@ private enum CodeSyntaxHighlighter {
         switch language {
         case .c, .cpp:
             return ["bool", "char", "double", "float", "int", "long", "short", "signed", "size_t", "unsigned", "void", "wchar_t"]
-        case .javascript:
+        case .javascript, .jsx:
             return ["Array", "BigInt", "Boolean", "Date", "Error", "Map", "Number", "Object", "Promise", "RegExp", "Set", "String", "Symbol"]
-        case .typescript:
+        case .typescript, .tsx, .vue, .svelte:
             return ["any", "bigint", "boolean", "interface", "never", "number", "object", "string", "symbol", "type", "undefined", "unknown"]
         case .go:
             return ["bool", "byte", "complex64", "complex128", "error", "float32", "float64", "int", "int8", "int16", "int32", "int64", "rune", "string", "uint", "uint8", "uint16", "uint32", "uint64", "uintptr"]
@@ -1222,7 +1246,7 @@ private enum CodeSyntaxHighlighter {
             return ["bool", "bytes", "dict", "float", "int", "list", "set", "str", "tuple"]
         case .sql:
             return ["bigint", "binary", "bit", "blob", "boolean", "char", "date", "datetime", "decimal", "double", "enum", "float", "int", "integer", "interval", "json", "jsonb", "numeric", "real", "serial", "smallint", "text", "time", "timestamp", "tinyint", "uuid", "varchar"]
-        case .json, .yaml:
+        case .json, .yaml, .html:
             return []
         }
     }

@@ -72,7 +72,7 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
 
     // The pwd of the focused surface as a URL
     private var pwdURL: URL? {
-        let path = surfacePwd ?? lastFocusedSurface?.value?.pwd
+        let path = surfacePwd ?? lastFocusedSurface?.value?.pwd ?? windowController?.focusedSurface?.pwd
         guard let path, !path.isEmpty else { return nil }
         return URL(fileURLWithPath: path)
     }
@@ -148,40 +148,45 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
                 // Every window needs its terminal content, including Quick Terminal,
                 // which deliberately has no normal window controller or sidebar.
                 ZStack {
-                    VStack(spacing: 0) {
-                        // If we're running in debug mode we show a warning so that users
-                        // know that performance will be degraded.
-                        if Ghostty.info.mode == GHOSTTY_BUILD_MODE_DEBUG || Ghostty.info.mode == GHOSTTY_BUILD_MODE_RELEASE_SAFE {
-                            DebugBuildWarningView()
-                        }
+                    // Remove the native terminal view while a repository panel is
+                    // shown, so its NSScrollView cursor rects cannot cover the panel.
+                    // The controller retains the surfaces and their running shells.
+                    if !pullRequestsVisible, !issuesVisible {
+                        VStack(spacing: 0) {
+                            // If we're running in debug mode we show a warning so that users
+                            // know that performance will be degraded.
+                            if Ghostty.info.mode == GHOSTTY_BUILD_MODE_DEBUG || Ghostty.info.mode == GHOSTTY_BUILD_MODE_RELEASE_SAFE {
+                                DebugBuildWarningView()
+                            }
 
-                        TerminalSplitTreeView(
-                            tree: viewModel.surfaceTree,
-                            action: { delegate?.performSplitAction($0) })
-                            .environmentObject(ghostty)
-                            .ghosttyLastFocusedSurface(lastFocusedSurface)
-                            .focused($focused)
-                            .onAppear { self.focused = true }
-                            .onChange(of: focusedSurface) { newValue in
-                                // We want to keep track of our last focused surface so even if
-                                // we lose focus we keep this set to the last non-nil value.
-                                if newValue != nil {
-                                    lastFocusedSurface = .init(newValue)
-                                    self.delegate?.focusedSurfaceDidChange(to: newValue)
+                            TerminalSplitTreeView(
+                                tree: viewModel.surfaceTree,
+                                action: { delegate?.performSplitAction($0) })
+                                .environmentObject(ghostty)
+                                .ghosttyLastFocusedSurface(lastFocusedSurface)
+                                .focused($focused)
+                                .onAppear { self.focused = true }
+                                .onChange(of: focusedSurface) { newValue in
+                                    // We want to keep track of our last focused surface so even if
+                                    // we lose focus we keep this set to the last non-nil value.
+                                    if newValue != nil {
+                                        lastFocusedSurface = .init(newValue)
+                                        self.delegate?.focusedSurfaceDidChange(to: newValue)
+                                    }
                                 }
-                            }
-                            .onChange(of: pwdURL) { newValue in
-                                self.delegate?.pwdDidChange(to: newValue)
-                            }
-                            .onChange(of: cellSize) { newValue in
-                                guard let size = newValue else { return }
-                                self.delegate?.cellSizeDidChange(to: size)
-                            }
-                            .frame(idealWidth: lastFocusedSurface?.value?.initialSize?.width,
-                                   idealHeight: lastFocusedSurface?.value?.initialSize?.height)
+                                .onChange(of: pwdURL) { newValue in
+                                    self.delegate?.pwdDidChange(to: newValue)
+                                }
+                                .onChange(of: cellSize) { newValue in
+                                    guard let size = newValue else { return }
+                                    self.delegate?.cellSizeDidChange(to: size)
+                                }
+                                .frame(idealWidth: lastFocusedSurface?.value?.initialSize?.width,
+                                       idealHeight: lastFocusedSurface?.value?.initialSize?.height)
+                        }
+                        // Ignore safe area to extend up into a hidden titlebar.
+                        .ignoresSafeArea(.container, edges: ghostty.config.macosTitlebarStyle == .hidden ? .top : [])
                     }
-                    // Ignore safe area to extend up in to the titlebar region if we have the "hidden" titlebar style
-                    .ignoresSafeArea(.container, edges: ghostty.config.macosTitlebarStyle == .hidden ? .top : [])
 
                     if let surfaceView = lastFocusedSurface?.value {
                         TerminalCommandPaletteView(

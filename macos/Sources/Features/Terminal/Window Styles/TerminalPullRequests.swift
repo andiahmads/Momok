@@ -71,6 +71,12 @@ private struct PullRequestListView: View {
             HStack {
                 Text("Pull Requests")
                     .font(.system(size: 13, weight: .semibold))
+                if !model.repository.isEmpty {
+                    Text(model.repository)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
                 Spacer()
                 Button(action: onClose) {
                     Image(systemName: "xmark")
@@ -313,6 +319,7 @@ private struct PullRequestRow: View {
             )
         }
         .buttonStyle(.plain)
+        .backport.pointerStyle(.link)
         .onHover { hovering = $0 }
         .accessibilityLabel("Pull request \(item.number): \(item.title)")
     }
@@ -1448,6 +1455,13 @@ private final class PullRequestWorkspaceModel: ObservableObject {
     func load(from rootURL: URL?) async {
         guard self.rootURL?.standardizedFileURL != rootURL?.standardizedFileURL || authored.isEmpty && others.isEmpty
         else { return }
+        if self.rootURL?.standardizedFileURL != rootURL?.standardizedFileURL {
+            closeDetail()
+            authored = []
+            others = []
+            repository = ""
+            currentBranch = ""
+        }
         self.rootURL = rootURL
         await loadList()
     }
@@ -1598,6 +1612,8 @@ private final class PullRequestWorkspaceModel: ObservableObject {
             guard generation == listGeneration else { return }
             authored = []
             others = []
+            repository = ""
+            currentBranch = ""
             isLoadingList = false
             listError = PullRequestError.userMessage(for: error)
         }
@@ -1730,29 +1746,21 @@ private enum GitHubCLI {
         let repository = try JSONDecoder().decode(GitHubRepository.self, from: repositoryData).nameWithOwner
         let branch = (try? Self.currentBranch(from: rootURL)) ?? ""
 
-        let authoredData = try run([
-            "search", "prs", "--author", "@me", "--state", "open", "--sort", "updated",
-            "--order", "desc", "--limit", "12", "--json",
-            "number,title,url,author,updatedAt,isDraft,repository,labels",
-        ], from: rootURL)
-        let searchItems = try JSONDecoder().decode([GitHubSearchPullRequest].self, from: authoredData)
-        let authored = searchItems.map { $0.summary }
-
-        let otherData = try run([
+        let viewerData = try run(["api", "user", "--jq", ".login"], from: rootURL)
+        let viewer = String(data: viewerData, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let listData = try run([
             "pr", "list", "--repo", repository, "--state", "open", "--limit", "60", "--json",
             PullRequestSummary.listFields,
         ], from: rootURL)
-        let repositoryItems = try JSONDecoder().decode([GitHubPullRequest].self, from: otherData)
-        let authoredURLs = Set(authored.map(\.url))
-        let others = repositoryItems
-            .map { $0.summary(repository: repository, isAuthored: false) }
-            .filter { !authoredURLs.contains($0.url) }
+        let repositoryItems = try JSONDecoder().decode([GitHubPullRequest].self, from: listData)
+            .map { $0.summary(repository: repository, isAuthored: $0.author.login == viewer) }
 
         return ListPayload(
             repository: repository,
             currentBranch: branch,
-            authored: authored,
-            others: others)
+            authored: repositoryItems.filter(\.isAuthored),
+            others: repositoryItems.filter { !$0.isAuthored })
     }
 
     static func loadDetail(for item: PullRequestSummary, from rootURL: URL?) throws -> PullRequestDetail {
@@ -1901,37 +1909,6 @@ private struct GitHubPullRequest: Decodable, Sendable {
             baseRefName: baseRefName,
             repository: repository,
             isAuthored: isAuthored,
-            fileCount: nil)
-    }
-}
-
-private struct GitHubSearchPullRequest: Decodable, Sendable {
-    let number: Int
-    let title: String
-    let url: URL
-    let author: PullRequestAuthor
-    let updatedAt: String
-    let isDraft: Bool
-    let repository: GitHubRepository
-    let labels: [PullRequestLabelData]
-
-    var summary: PullRequestSummary {
-        PullRequestSummary(
-            number: number,
-            title: title,
-            url: url,
-            author: author,
-            updatedAt: updatedAt,
-            isDraft: isDraft,
-            reviewDecision: "",
-            statusCheckRollup: [],
-            additions: 0,
-            deletions: 0,
-            labels: labels,
-            headRefName: "",
-            baseRefName: "",
-            repository: repository.nameWithOwner,
-            isAuthored: true,
             fileCount: nil)
     }
 }
