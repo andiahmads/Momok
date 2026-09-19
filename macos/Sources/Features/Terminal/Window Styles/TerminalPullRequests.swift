@@ -2560,12 +2560,12 @@ private struct PullRequestCommentTextEditor: NSViewRepresentable {
     }
 }
 
+@MainActor
 enum PullRequestNotification {
     static let categoryIdentifier = "momok.pull-request"
     static let openActionIdentifier = "momok.pull-request.open"
     static let urlKey = "pullRequestURL"
-    private static let soundFilename = "universfield-new-notification-047-494238.caf"
-    private static let fallbackSound: NSSound? = {
+    private static let commentSound: NSSound? = {
         guard let url = Bundle.main.url(
             forResource: "universfield-new-notification-047-494238",
             withExtension: "caf")
@@ -2575,19 +2575,20 @@ enum PullRequestNotification {
 
     static func deliver(title: String, body: String, url: URL) {
         Task { @MainActor in
+            // Play in-app independently of macOS notification sound settings.
+            // Do this before authorization so a denied banner cannot silence it.
+            playCommentSound()
             let center = UNUserNotificationCenter.current()
             do {
-                let granted = try await center.requestAuthorization(options: [.alert, .sound])
-                guard granted else {
-                    playFallbackSound()
-                    return
-                }
+                let granted = try await center.requestAuthorization(options: [.alert])
+                guard granted else { return }
 
                 let content = UNMutableNotificationContent()
                 content.title = title
                 content.body = body
-                content.sound = UNNotificationSound(
-                    named: UNNotificationSoundName(rawValue: soundFilename))
+                // The application already played the sound; keep the banner silent
+                // even when native notification sounds are enabled later.
+                content.sound = nil
                 content.categoryIdentifier = categoryIdentifier
                 content.threadIdentifier = "pull-requests"
                 content.userInfo = [urlKey: url.absoluteString]
@@ -2598,13 +2599,18 @@ enum PullRequestNotification {
                     trigger: nil)
                 try await center.add(request)
             } catch {
-                playFallbackSound()
+                AppDelegate.logger.warning("Could not deliver comment banner: \(error.localizedDescription, privacy: .public)")
             }
         }
     }
 
-    private static func playFallbackSound() {
-        if fallbackSound?.play() != true {
+    private static func playCommentSound() {
+        // Restart the short sound if another comment arrives during playback.
+        commentSound?.stop()
+        if commentSound?.play() == true {
+            AppDelegate.logger.info("Playing in-app comment notification sound")
+        } else {
+            AppDelegate.logger.warning("Could not play comment notification sound; using system beep")
             NSSound.beep()
         }
     }

@@ -964,7 +964,7 @@ class AppDelegate: NSObject,
         withCompletionHandler: (UNNotificationPresentationOptions) -> Void
     ) {
         if willPresent.request.content.categoryIdentifier == PullRequestNotification.categoryIdentifier {
-            withCompletionHandler([.banner, .sound])
+            withCompletionHandler([.banner])
             return
         }
 
